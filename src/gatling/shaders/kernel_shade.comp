@@ -1,11 +1,33 @@
 #version 450 core
 
-layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
-
 #include "extensions.glsl"
 #include "common.glsl"
 
-vec4 shade(const hit_info hit)
+const float RAY_OFFSET_EPS = 0.0001;
+
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+layout(constant_id = 1) const uint SAMPLE_COUNT = 4;
+
+vec3 uniform_sample_hemisphere(inout uint rng_state, vec3 normal)
+{
+    const float r1 = random_float_between_0_and_1(rng_state);
+    const float r2 = random_float_between_0_and_1(rng_state);
+
+    const vec3 u = abs(normal.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+    const vec3 v = normalize(cross(u, normal));
+    const vec3 w = cross(normal, v);
+
+    const float phi = 2.0 * PI * r2;
+    const float sin_theta = sqrt(1.0 - r1 * r1);
+
+    const float x = sin_theta * cos(phi);
+    const float y = sin_theta * sin(phi);
+    const float z = r1;
+
+    return (x * w) + (y * v) + (z * normal);
+}
+
+vec4 shade_diffuse(inout uint rng_state, hit_info hit)
 {
     const face f = faces[hit.face_index];
     const vec3 n0 = vertices[f.v_0].field2.xyz;
@@ -13,15 +35,32 @@ vec4 shade(const hit_info hit)
     const vec3 n2 = vertices[f.v_2].field2.xyz;
     const vec2 bc = hit.bc;
 
+    const material m = materials[f.mat_index];
+
     const vec3 normal = normalize(
         n0 * (1.0 - bc.x - bc.y) +
         n1 * bc.x +
         n2 * bc.y
     );
 
-    const vec4 color = vec4(abs(normal), 1.0);
+    const float PDF = 1.0 / (2.0 * PI);
 
-    return color;
+    path_segment new_ray;
+    new_ray.origin = hit.pos.xyz + normal * RAY_OFFSET_EPS;
+    new_ray.pixel_index = hit.pixel_index;
+    new_ray.dir = uniform_sample_hemisphere(rng_state, normal);
+    new_ray.throughput =
+        hit.throughput *
+        (m.color.rgb / PI) *
+        (abs(dot(normal, new_ray.dir)) / PDF);
+
+    const uint new_ray_idx = atomicAdd(path_segment_write_counter, 1);
+
+    path_segments[new_ray_idx] = new_ray;
+
+    const vec4 color = vec4(hit.throughput * m.emission, 1.0);
+
+    return color / float(SAMPLE_COUNT);
 }
 
 void atomic_channel_exchange(uint buffer_index, float value)
@@ -38,8 +77,8 @@ void atomic_channel_exchange(uint buffer_index, float value)
             gl_SemanticsRelaxed
         );
         const float old_f = uintBitsToFloat(old);
-        const float t = (old_f == -0.0) ? 1.0 : 0.5;
-        desired = floatBitsToUint(mix(old_f, value, t));
+        const float new_f = clamp(old_f + value, 0.0, 1.0);
+        desired = floatBitsToUint(new_f);
     }
     while (atomicCompSwap(
                 pixels[buffer_index], old, desired,
@@ -50,18 +89,31 @@ void atomic_channel_exchange(uint buffer_index, float value)
                 gl_SemanticsRelaxed) != old);
 }
 
+shared uint base_index;
+
 void main()
 {
+    if (gl_GlobalInvocationID.x == 0)
+    {
+        path_segment_read_counter = 0;
+        path_segment_write_counter = 0;
+    }
+
+    memoryBarrierBuffer();
+
+    uint rng_state = wang_hash(gl_GlobalInvocationID.x);
+
     while(true)
     {
         const uint hit_index = atomicAdd(hit_read_counter, 1);
+
         if (hit_index >= hit_write_counter) {
             return;
         }
 
         const hit_info hit = hits[hit_index];
 
-        const vec4 color = shade(hit);
+        const vec4 color = shade_diffuse(rng_state, hit);
 
         /* Reduce pressure per lockstep by selecting the color channel depending on thread id. */
         const uvec4 offsets = (uvec4(gl_GlobalInvocationID.x) + uvec4(0, 1, 2, 3)) % 4;

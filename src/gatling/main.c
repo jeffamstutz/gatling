@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include <stdio.h>
+#include <inttypes.h>
 
 #include <cgpu.h>
 
@@ -12,9 +13,18 @@ static uint32_t DEFAULT_IMAGE_WIDTH = 1920;
 static uint32_t DEFAULT_IMAGE_HEIGHT = 1080;
 static uint32_t DEFAULT_SPP = 256;
 static uint32_t DEFAULT_BOUNCES = 4;
+/* Until a better PRNG is implemented, the number of rays in the pool
+ * strongly affects sampling and may produce visual artifacts. */
+static uint32_t DEFAULT_POOL_RAY_COUNT = 18279321;
 static float DEFAULT_CAMERA_ORIGIN[3] = { 0.0f, 0.5f, 2.5f };
 static float DEFAULT_CAMERA_TARGET[3] = { 0.0f, 0.5f, 0.0f };
 static float DEFAULT_CAMERA_FOV = 0.872665f;
+
+typedef struct raygen_push_consts {
+  uint32_t pixel_index_offset;
+  uint32_t sample_index_offset;
+  uint32_t ray_pool_size;
+} raygen_push_consts;
 
 typedef struct program_options {
   const char* input_file;
@@ -23,6 +33,7 @@ typedef struct program_options {
   uint32_t image_height;
   uint32_t spp;
   uint32_t bounces;
+  uint32_t pool_ray_count;
   float camera_origin[3];
   float camera_target[3];
   float camera_fov;
@@ -204,37 +215,27 @@ static void gatling_get_parent_directory(
   }
 }
 
-static void gatling_print_timestamp(
-  const char* name,
-  uint64_t elapsed_timesteps,
-  float timestamp_period)
-{
-  const float elapsed_nanoseconds  = elapsed_timesteps * timestamp_period;
-  const float elapsed_microseconds = elapsed_nanoseconds / 1000.0f;
-  const float elapsed_milliseconds = elapsed_microseconds / 1000.0f;
-  printf("Elapsed time for %s: %.2fms\n", name, elapsed_milliseconds);
-}
-
 void gatling_print_usage_and_exit()
 {
   printf("Usage: gatling <scene.gsd> <output.png> [options]\n");
   printf("\n");
   printf("Options:\n");
-  printf("--image-width   [default: %u]\n", DEFAULT_IMAGE_WIDTH);
-  printf("--image-height  [default: %u]\n", DEFAULT_IMAGE_HEIGHT);
-  printf("--spp           [default: %u]\n", DEFAULT_SPP);
-  printf("--bounces       [default: %u]\n", DEFAULT_BOUNCES);
-  printf("--camera-origin [default: %.3f,%.3f,%.3f]\n",
+  printf("--image-width    [default: %u]\n", DEFAULT_IMAGE_WIDTH);
+  printf("--image-height   [default: %u]\n", DEFAULT_IMAGE_HEIGHT);
+  printf("--spp            [default: %u]\n", DEFAULT_SPP);
+  printf("--bounces        [default: %u]\n", DEFAULT_BOUNCES);
+  printf("--pool-ray-count [default: %u]\n", DEFAULT_POOL_RAY_COUNT);
+  printf("--camera-origin  [default: %.3f,%.3f,%.3f]\n",
     DEFAULT_CAMERA_ORIGIN[0],
     DEFAULT_CAMERA_ORIGIN[1],
     DEFAULT_CAMERA_ORIGIN[2]
   );
-  printf("--camera-target [default: %.3f,%.3f,%.3f]\n",
+  printf("--camera-target  [default: %.3f,%.3f,%.3f]\n",
     DEFAULT_CAMERA_TARGET[0],
     DEFAULT_CAMERA_TARGET[1],
     DEFAULT_CAMERA_TARGET[2]
   );
-  printf("--camera-fov    [default: %.5f]\n", DEFAULT_CAMERA_FOV);
+  printf("--camera-fov     [default: %.5f]\n", DEFAULT_CAMERA_FOV);
   exit(EXIT_FAILURE);
 }
 
@@ -250,6 +251,7 @@ void gatling_parse_args(int argc, const char* argv[], program_options* options)
   options->image_height = DEFAULT_IMAGE_HEIGHT;
   options->spp = DEFAULT_SPP;
   options->bounces = DEFAULT_BOUNCES;
+  options->pool_ray_count = DEFAULT_POOL_RAY_COUNT;
   memcpy(&options->camera_origin, &DEFAULT_CAMERA_ORIGIN, 12);
   memcpy(&options->camera_target, &DEFAULT_CAMERA_TARGET, 12);
   options->camera_fov = DEFAULT_CAMERA_FOV;
@@ -290,6 +292,12 @@ void gatling_parse_args(int argc, const char* argv[], program_options* options)
     {
       char* endptr = NULL;
       options->bounces = strtol(value, &endptr, 10);
+      fail = (endptr == value);
+    }
+    else if (strstr(arg, "--pool-ray-count=") == arg)
+    {
+      char* endptr = NULL;
+      options->pool_ray_count = strtol(value, &endptr, 10);
       fail = (endptr == value);
     }
     else if (strstr(arg, "--camera-origin=") == arg)
@@ -392,11 +400,10 @@ int main(int argc, const char* argv[])
   }
 
   /* Create input and output buffers. */
-  const uint64_t path_seg_struct_size = 32;
-  const uint64_t hit_info_struct_size = 32;
+  const uint64_t path_seg_struct_size = 48;
+  const uint64_t hit_info_struct_size = 48;
   const uint64_t path_seg_header_size = 16;
   const uint64_t hit_info_header_size = 16;
-  const uint64_t node_struct_size = 32;
 
   const struct file_header {
     uint64_t node_buf_offset;
@@ -423,18 +430,23 @@ int main(int argc, const char* argv[])
   const uint64_t new_vertex_buf_offset = gatling_align_buffer(offset_align, file_header.vertex_buf_size, &device_buf_size);
   const uint64_t new_material_buf_offset = gatling_align_buffer(offset_align, file_header.material_buf_size, &device_buf_size);
 
-  const uint64_t prim_ray_count = options.image_width * options.image_height * options.spp;
+  const uint64_t total_ray_count = (uint64_t)options.image_width * (uint64_t)options.image_height * (uint64_t)options.spp;
+  const uint64_t ray_pool_size = (total_ray_count < options.pool_ray_count) ? total_ray_count : options.pool_ray_count;
+
+  printf("Total ray count: %" PRIu64 "\n", total_ray_count);
+  printf("Pool ray count: %" PRIu64 "\n", ray_pool_size);
 
   const uint64_t path_segment_buf_offset = 0;
-  const uint64_t path_segment_buf_size = prim_ray_count * path_seg_struct_size + path_seg_header_size;
-  const uint64_t hit_info_buf_offset = path_segment_buf_offset + path_segment_buf_size;
-  const uint64_t hit_info_buf_size = prim_ray_count * hit_info_struct_size + hit_info_header_size;
-
-  const uint64_t intermediate_buf_size = path_segment_buf_size + hit_info_buf_size;
+  const uint64_t path_segment_buf_size = ray_pool_size * path_seg_struct_size + path_seg_header_size;
+  const uint64_t hit_info_buf_size = ray_pool_size * hit_info_struct_size + hit_info_header_size;
+  uint64_t intermediate_buf_size = path_segment_buf_offset + path_segment_buf_size;
+  const uint64_t hit_info_buf_offset = gatling_align_buffer(offset_align, hit_info_buf_size, &intermediate_buf_size);
 
   const uint64_t output_buffer_size = options.image_width * options.image_height * sizeof(float) * 4;
-
   const uint64_t staging_buffer_size = output_buffer_size > device_buf_size ? output_buffer_size : device_buf_size;
+
+  const uint64_t total_memory_used = device_buf_size + staging_buffer_size + intermediate_buf_size + output_buffer_size;
+  printf("Total allocated GPU memory: %" PRIu64 " MB\n", total_memory_used / (1024 * 1024));
 
   cgpu_buffer input_buffer;
   cgpu_buffer staging_buffer;
@@ -558,20 +570,19 @@ int main(int argc, const char* argv[])
   {
     const cgpu_specialization_constant speccs[] = {
       { .constant_id =  0, .p_data = (void*) &device_limits.subgroupSize, .size = 4 },
-      { .constant_id =  1, .p_data = (void*) &device_limits.subgroupSize, .size = 4 },
-      { .constant_id =  2, .p_data = (void*) &options.spp,                .size = 4 },
-      { .constant_id =  3, .p_data = (void*) &options.image_width,        .size = 4 },
-      { .constant_id =  4, .p_data = (void*) &options.image_height,       .size = 4 },
-      { .constant_id =  5, .p_data = (void*) &options.camera_origin[0],   .size = 4 },
-      { .constant_id =  6, .p_data = (void*) &options.camera_origin[1],   .size = 4 },
-      { .constant_id =  7, .p_data = (void*) &options.camera_origin[2],   .size = 4 },
-      { .constant_id =  8, .p_data = (void*) &options.camera_target[0],   .size = 4 },
-      { .constant_id =  9, .p_data = (void*) &options.camera_target[1],   .size = 4 },
-      { .constant_id = 10, .p_data = (void*) &options.camera_target[2],   .size = 4 },
-      { .constant_id = 11, .p_data = (void*) &options.camera_fov,         .size = 4 }
+      { .constant_id =  1, .p_data = (void*) &options.spp,                .size = 4 },
+      { .constant_id =  2, .p_data = (void*) &options.image_width,        .size = 4 },
+      { .constant_id =  3, .p_data = (void*) &options.image_height,       .size = 4 },
+      { .constant_id =  4, .p_data = (void*) &options.camera_origin[0],   .size = 4 },
+      { .constant_id =  5, .p_data = (void*) &options.camera_origin[1],   .size = 4 },
+      { .constant_id =  6, .p_data = (void*) &options.camera_origin[2],   .size = 4 },
+      { .constant_id =  7, .p_data = (void*) &options.camera_target[0],   .size = 4 },
+      { .constant_id =  8, .p_data = (void*) &options.camera_target[1],   .size = 4 },
+      { .constant_id =  9, .p_data = (void*) &options.camera_target[2],   .size = 4 },
+      { .constant_id = 10, .p_data = (void*) &options.camera_fov,         .size = 4 }
     };
-    const uint32_t specc_count = 12;
-    const uint32_t push_consts_size = 0;
+    const uint32_t specc_count = 11;
+    const uint32_t push_consts_size = sizeof(raygen_push_consts);
 
     gatling_create_pipeline(
       device,
@@ -590,17 +601,14 @@ int main(int argc, const char* argv[])
      * we need (log8(node_count) * 2) and how many we can fit into shared memory
      * (via device_limits.maxComputeSharedMemorySize and our workgroup size). */
     const uint32_t traversal_stack_size = 6;
-    const uint32_t sm_traversal_stack_size = 12;
+    const uint32_t sm_traversal_stack_size = 8;
 
     const cgpu_specialization_constant speccs[] = {
       { .constant_id = 0, .p_data = (void*) &device_limits.subgroupSize, .size = 4 },
-      { .constant_id = 1, .p_data = (void*) &options.spp,                .size = 4 },
-      { .constant_id = 2, .p_data = (void*) &options.image_width,        .size = 4 },
-      { .constant_id = 3, .p_data = (void*) &options.image_height,       .size = 4 },
-      { .constant_id = 4, .p_data = (void*) &traversal_stack_size,       .size = 4 },
-      { .constant_id = 5, .p_data = (void*) &sm_traversal_stack_size,    .size = 4 }
+      { .constant_id = 1, .p_data = (void*) &traversal_stack_size,       .size = 4 },
+      { .constant_id = 2, .p_data = (void*) &sm_traversal_stack_size,    .size = 4 }
     };
-    const uint32_t specc_count = 6;
+    const uint32_t specc_count = 3;
     const uint32_t push_consts_size = 0;
 
     gatling_create_pipeline(
@@ -617,9 +625,10 @@ int main(int argc, const char* argv[])
 
   {
     const cgpu_specialization_constant speccs[] = {
-      { .constant_id = 0, .p_data = (void*) &device_limits.subgroupSize, .size = 4 }
+      { .constant_id = 0, .p_data = (void*) &device_limits.subgroupSize, .size = 4 },
+      { .constant_id = 1, .p_data = (void*) &options.spp,                .size = 4 }
     };
-    const uint32_t specc_count = 1;
+    const uint32_t specc_count = 2;
     const uint32_t push_consts_size = 0;
 
     gatling_create_pipeline(
@@ -675,108 +684,120 @@ int main(int argc, const char* argv[])
   );
   gatling_cgpu_ensure(c_result);
 
-  /* Generate primary rays and clear pixels. */
-  c_result = cgpu_cmd_bind_pipeline(
-    command_buffer,
-    pipeline_ray_gen.pipeline
-  );
-  gatling_cgpu_ensure(c_result);
+  uint64_t ray_offset = 0;
+
+  while (ray_offset < total_ray_count)
+  {
+    /* Generate primary rays and clear pixels. */
+    c_result = cgpu_cmd_bind_pipeline(
+      command_buffer,
+      pipeline_ray_gen.pipeline
+    );
+    gatling_cgpu_ensure(c_result);
+
+    const uint64_t rays_left = total_ray_count - ray_offset;
+    const uint32_t pool_size = (uint32_t) (rays_left < ray_pool_size ? rays_left : ray_pool_size);
+
+    const raygen_push_consts gen_push_consts = {
+      .pixel_index_offset = (uint32_t) (ray_offset / (uint64_t) options.spp),
+      .sample_index_offset = (uint32_t) (ray_offset % (uint64_t) options.spp),
+      .ray_pool_size = pool_size
+    };
+
+    c_result = cgpu_cmd_push_constants(
+      command_buffer,
+      pipeline_ray_gen.pipeline,
+      sizeof(raygen_push_consts),
+      &gen_push_consts
+    );
+    gatling_cgpu_ensure(c_result);
+
+    c_result = cgpu_cmd_dispatch(
+      command_buffer,
+      (pool_size / device_limits.subgroupSize) + 1,
+      1,
+      1
+    );
+    gatling_cgpu_ensure(c_result);
+
+    for (uint32_t bounce = 0; bounce < (options.bounces + 1); ++bounce)
+    {
+      /* Trace primary and secondary rays. */
+      const cgpu_buffer_memory_barrier buffer_memory_barrier_2 = {
+        .src_access_flags = CGPU_MEMORY_ACCESS_FLAG_SHADER_WRITE,
+        .dst_access_flags = CGPU_MEMORY_ACCESS_FLAG_SHADER_READ,
+        .buffer = intermediate_buffer,
+        .offset = path_segment_buf_offset,
+        .size = path_segment_buf_size
+      };
+
+      c_result = cgpu_cmd_pipeline_barrier(
+        command_buffer,
+        0, NULL,
+        1, &buffer_memory_barrier_2,
+        0, NULL
+      );
+      gatling_cgpu_ensure(c_result);
+
+      c_result = cgpu_cmd_bind_pipeline(
+        command_buffer,
+        pipeline_extend.pipeline
+      );
+      gatling_cgpu_ensure(c_result);
+
+      c_result = cgpu_cmd_dispatch(
+        command_buffer,
+        device_limits.maxComputeWorkGroupSize[0],
+        1,
+        1
+      );
+      gatling_cgpu_ensure(c_result);
+
+      /* Shade hit points. */
+      const cgpu_buffer_memory_barrier buffer_memory_barrier_3[] = {
+        {
+          .src_access_flags = CGPU_MEMORY_ACCESS_FLAG_SHADER_WRITE,
+          .dst_access_flags = CGPU_MEMORY_ACCESS_FLAG_SHADER_READ,
+          .buffer = intermediate_buffer,
+          .offset = hit_info_buf_offset,
+          .size = hit_info_buf_size
+        },
+        {
+          .src_access_flags = CGPU_MEMORY_ACCESS_FLAG_SHADER_WRITE,
+          .dst_access_flags = CGPU_MEMORY_ACCESS_FLAG_SHADER_READ | CGPU_MEMORY_ACCESS_FLAG_SHADER_WRITE,
+          .buffer = output_buffer,
+          .offset = 0,
+          .size = CGPU_WHOLE_SIZE
+        }
+      };
+
+      c_result = cgpu_cmd_pipeline_barrier(
+        command_buffer,
+        0, NULL,
+        2, buffer_memory_barrier_3,
+        0, NULL
+      );
+      gatling_cgpu_ensure(c_result);
+
+      c_result = cgpu_cmd_bind_pipeline(
+        command_buffer,
+        pipeline_shade.pipeline
+      );
+      gatling_cgpu_ensure(c_result);
+
+      c_result = cgpu_cmd_dispatch(
+        command_buffer,
+        device_limits.maxComputeWorkGroupSize[0],
+        1,
+        1
+      );
+      gatling_cgpu_ensure(c_result);
+    }
+
+    ray_offset += ray_pool_size;
+  }
 
   c_result = cgpu_cmd_write_timestamp(command_buffer, 1);
-  gatling_cgpu_ensure(c_result);
-
-  c_result = cgpu_cmd_dispatch(
-    command_buffer,
-    (options.image_width / device_limits.subgroupSize) + 1,
-    (options.image_height / device_limits.subgroupSize) + 1,
-    1
-  );
-  gatling_cgpu_ensure(c_result);
-
-  c_result = cgpu_cmd_write_timestamp(command_buffer, 2);
-  gatling_cgpu_ensure(c_result);
-
-  /* Trace rays. */
-  const cgpu_buffer_memory_barrier buffer_memory_barrier_2 = {
-    .src_access_flags = CGPU_MEMORY_ACCESS_FLAG_SHADER_WRITE,
-    .dst_access_flags = CGPU_MEMORY_ACCESS_FLAG_SHADER_READ,
-    .buffer = intermediate_buffer,
-    .offset = path_segment_buf_offset,
-    .size = path_segment_buf_size
-  };
-
-  c_result = cgpu_cmd_pipeline_barrier(
-    command_buffer,
-    0, NULL,
-    1, &buffer_memory_barrier_2,
-    0, NULL
-  );
-  gatling_cgpu_ensure(c_result);
-
-  c_result = cgpu_cmd_bind_pipeline(
-    command_buffer,
-    pipeline_extend.pipeline
-  );
-  gatling_cgpu_ensure(c_result);
-
-  c_result = cgpu_cmd_write_timestamp(command_buffer, 3);
-  gatling_cgpu_ensure(c_result);
-
-  c_result = cgpu_cmd_dispatch(
-    command_buffer,
-    ((options.image_width * options.image_height * options.spp) / device_limits.subgroupSize) + 1,
-    1,
-    1
-  );
-  gatling_cgpu_ensure(c_result);
-
-  c_result = cgpu_cmd_write_timestamp(command_buffer, 4);
-  gatling_cgpu_ensure(c_result);
-
-  /* Shade hit points. */
-  const cgpu_buffer_memory_barrier buffer_memory_barrier_3[] = {
-    {
-      .src_access_flags = CGPU_MEMORY_ACCESS_FLAG_SHADER_WRITE,
-      .dst_access_flags = CGPU_MEMORY_ACCESS_FLAG_SHADER_READ,
-      .buffer = intermediate_buffer,
-      .offset = hit_info_buf_offset,
-      .size = hit_info_buf_size
-    },
-    {
-      .src_access_flags = CGPU_MEMORY_ACCESS_FLAG_SHADER_WRITE,
-      .dst_access_flags = CGPU_MEMORY_ACCESS_FLAG_SHADER_READ,
-      .buffer = output_buffer,
-      .offset = 0,
-      .size = CGPU_WHOLE_SIZE
-    }
-  };
-
-  c_result = cgpu_cmd_pipeline_barrier(
-    command_buffer,
-    0, NULL,
-    2, buffer_memory_barrier_3,
-    0, NULL
-  );
-  gatling_cgpu_ensure(c_result);
-
-  c_result = cgpu_cmd_bind_pipeline(
-    command_buffer,
-    pipeline_shade.pipeline
-  );
-  gatling_cgpu_ensure(c_result);
-
-  c_result = cgpu_cmd_write_timestamp(command_buffer, 5);
-  gatling_cgpu_ensure(c_result);
-
-  c_result = cgpu_cmd_dispatch(
-    command_buffer,
-    ((options.image_width * options.image_height * options.spp) / device_limits.subgroupSize) + 1,
-    1,
-    1
-  );
-  gatling_cgpu_ensure(c_result);
-
-  c_result = cgpu_cmd_write_timestamp(command_buffer, 6);
   gatling_cgpu_ensure(c_result);
 
   /* Copy staging buffer to output buffer. */
@@ -806,15 +827,11 @@ int main(int argc, const char* argv[])
   );
   gatling_cgpu_ensure(c_result);
 
-  /* Write end timestamp and copy timestamps. */
-  c_result = cgpu_cmd_write_timestamp(command_buffer, 7);
-  gatling_cgpu_ensure(c_result);
-
   c_result = cgpu_cmd_copy_timestamps(
     command_buffer,
     timestamp_buffer,
     0,
-    8,
+    2,
     true
   );
   gatling_cgpu_ensure(c_result);
@@ -855,29 +872,16 @@ int main(int argc, const char* argv[])
   gatling_cgpu_ensure(c_result);
 
   const uint64_t timestamp_start = timestamps[0];
-  const uint64_t timestamp_start_ray_gen = timestamps[1];
-  const uint64_t timestamp_end_ray_gen = timestamps[2];
-  const uint64_t timestamp_start_extend = timestamps[3];
-  const uint64_t timestamp_end_extend = timestamps[4];
-  const uint64_t timestamp_start_shade = timestamps[5];
-  const uint64_t timestamp_end_shade = timestamps[6];
-  const uint64_t timestamp_end = timestamps[7];
+  const uint64_t timestamp_end = timestamps[1];
 
   c_result = cgpu_unmap_buffer(device, timestamp_buffer);
   gatling_cgpu_ensure(c_result);
 
   const float timestamp_ns_period = device_limits.timestampPeriod;
-  const uint64_t timespan_ray_gen = timestamp_end_ray_gen - timestamp_start_ray_gen;
-  const uint64_t timespan_extend = timestamp_end_extend - timestamp_start_extend;
-  const uint64_t timespan_shade = timestamp_end_shade - timestamp_start_shade;
-  const uint64_t timespan_total = timestamp_end - timestamp_start;
-  const uint64_t timespan_sync = timespan_total - timespan_ray_gen - timespan_extend - timespan_shade;
-
-  gatling_print_timestamp("prim ray gen",  timespan_ray_gen, timestamp_ns_period);
-  gatling_print_timestamp("extend",        timespan_extend,  timestamp_ns_period);
-  gatling_print_timestamp("shade",         timespan_shade,   timestamp_ns_period);
-  gatling_print_timestamp("sync overhead", timespan_sync,    timestamp_ns_period);
-  gatling_print_timestamp("total",         timespan_total,   timestamp_ns_period);
+  const float elapsed_nanoseconds  = (float) (timestamp_end - timestamp_start) * device_limits.timestampPeriod;
+  const float elapsed_microseconds = elapsed_nanoseconds / 1000.0f;
+  const float elapsed_milliseconds = elapsed_microseconds / 1000.0f;
+  printf("Total rendering time: %.2fms\n", elapsed_milliseconds);
 
   /* Read data from gpu. */
   float* image_data = malloc(output_buffer_size);

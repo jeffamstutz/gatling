@@ -4,11 +4,8 @@
 #include "common.glsl"
 
 layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
-layout(constant_id = 1) const uint SAMPLE_COUNT = 1;
-layout(constant_id = 2) const uint IMAGE_WIDTH = 3840;
-layout(constant_id = 3) const uint IMAGE_HEIGHT = 2160;
-layout(constant_id = 4) const uint MAX_STACK_SIZE = 6;
-layout(constant_id = 5) const uint MAX_SM_STACK_SIZE = 12;
+layout(constant_id = 1) const uint MAX_STACK_SIZE = 6;
+layout(constant_id = 2) const uint MAX_SM_STACK_SIZE = 12;
 
 const float TRI_EPS = 0.0000001;
 
@@ -259,9 +256,10 @@ void traverse_bvh(in const uint ray_index)
             const uint hit_index = atomicAdd(hit_write_counter, 1);
 
             hit_info hit;
-            hit.pos = vec4(ray.origin + ray.dir * t_max, 1.0);
+            hit.pos = ray.origin + ray.dir * t_max;
             hit.face_index = hit_face_idx;
             hit.bc = hit_bc;
+            hit.throughput = ray.throughput;
             hit.pixel_index = ray.pixel_index;
             hits[hit_index] = hit;
         }
@@ -272,15 +270,24 @@ void traverse_bvh(in const uint ray_index)
 
 void main()
 {
-    const uint TOTAL_RAY_COUNT = IMAGE_WIDTH * IMAGE_HEIGHT * SAMPLE_COUNT;
+    if (gl_GlobalInvocationID.x == 0)
+    {
+        hit_read_counter = 0;
+        hit_write_counter = 0;
+    }
+
+    memoryBarrierBuffer();
 
     while(true)
     {
-        const uint ray_index = atomicAdd(path_segment_counter, 1);
+        /* I've tried to decrease global atomic counter pressure by using
+         * groupshared memory and subgroup operations but it turns out that
+         * this is actually faster on my Pascal GPU... */
+        const uint ray_index = atomicAdd(path_segment_read_counter, 1);
 
-        if (ray_index >= TOTAL_RAY_COUNT)
+        if (ray_index >= path_segment_write_counter)
         {
-            return;
+            break;
         }
 
         traverse_bvh(ray_index);

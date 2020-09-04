@@ -52,15 +52,19 @@ struct path_segment
     vec3 origin;
     uint pixel_index;
     vec3 dir;
-    uint rec_depth;
+    float pad_1;
+    vec3 throughput;
+    float pad_2;
 };
 
 struct hit_info
 {
-    vec4 pos;
-    vec2 bc;
-    uint pixel_index;
+    vec3 pos;
     uint face_index;
+    vec3 throughput;
+    uint pixel_index;
+    vec2 bc;
+    vec2 padding;
 };
 
 layout(set=0, binding=0) queuefamilycoherent buffer BufferOutput
@@ -70,8 +74,8 @@ layout(set=0, binding=0) queuefamilycoherent buffer BufferOutput
 
 layout(set=0, binding=1) buffer BufferPathSegments
 {
-    uint path_segment_counter;
-    uint pad_0;
+    uint path_segment_write_counter;
+    uint path_segment_read_counter;
     uint pad_1;
     uint pad_2;
     path_segment path_segments[];
@@ -104,5 +108,23 @@ layout(set=0, binding=6) buffer BufferHitInfos
     uint padding[2];
     hit_info hits[];
 };
+
+uint wang_hash(uint seed)
+{
+    seed = (seed ^ 61u) ^ (seed >> 16u);
+    seed *= 9u;
+    seed = seed ^ (seed >> 4u);
+    seed *= 0x27d4eb2du;
+    seed = seed ^ (seed >> 15u);
+    return seed;
+}
+
+float random_float_between_0_and_1(inout uint rng_state)
+{
+    rng_state ^= rng_state << 13u;
+    rng_state ^= rng_state >> 17u;
+    rng_state ^= rng_state << 5u;
+    return float(rng_state) * (1.0 / 4294967296.0);
+}
 
 #endif
