@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <assert.h>
 
@@ -11,6 +12,23 @@
 #include "bvh.h"
 #include "bvh_collapse.h"
 #include "bvh_compress.h"
+
+static uint32_t DEFAULT_IMAGE_WIDTH = 1200;
+static uint32_t DEFAULT_IMAGE_HEIGHT = 1200;
+static float DEFAULT_SR_FRONT = 1.0f;
+static float DEFAULT_SR_BACK = 10.0f;
+static float DEFAULT_SR_OUTSIDE_FRUSTUM = 100.0f;
+
+struct program_options
+{
+  const char* input_path;
+  const char* output_path;
+  uint32_t image_width;
+  uint32_t image_height;
+  float sr_front;
+  float sr_back;
+  float sr_outside_frustum;
+};
 
 typedef struct gp_camera {
   gp_vec3 origin;
@@ -34,6 +52,86 @@ static void gp_fail(const char* msg)
 {
   printf("Gatling encountered a fatal error: %s\n", msg);
   exit(-1);
+}
+
+static void gp_print_usage_and_exit()
+{
+  printf("Usage: gp <cornell.glb> <scene.gsd> [options]\n");
+  printf("\n");
+  printf("Options:\n");
+  printf("--image-width        [default: %u]\n", DEFAULT_IMAGE_WIDTH);
+  printf("--image-height       [default: %u]\n", DEFAULT_IMAGE_HEIGHT);
+  printf("--sr-front           [default: %f]\n", DEFAULT_SR_FRONT);
+  printf("--sr-back            [default: %f]\n", DEFAULT_SR_BACK);
+  printf("--sr-outside-frustum [default: %f]\n", DEFAULT_SR_OUTSIDE_FRUSTUM);
+  exit(EXIT_FAILURE);
+}
+
+static void gp_parse_args(int argc,
+                          const char* argv[],
+                          struct program_options* options)
+{
+  if (argc < 3) {
+    gp_print_usage_and_exit();
+  }
+
+  options->input_path = argv[1];
+  options->output_path = argv[2];
+  options->image_width = DEFAULT_IMAGE_WIDTH;
+  options->image_height = DEFAULT_IMAGE_HEIGHT;
+  options->sr_front = DEFAULT_SR_FRONT;
+  options->sr_back = DEFAULT_SR_BACK;
+  options->sr_outside_frustum = DEFAULT_SR_OUTSIDE_FRUSTUM;
+
+  for (int i = 3; i < argc; ++i)
+  {
+    const char* arg = argv[i];
+
+    char* value = strpbrk(arg, "=");
+
+    if (value == NULL) {
+      gp_print_usage_and_exit();
+    }
+
+    value++;
+
+    bool fail = true;
+
+    if (strstr(arg, "--image-width=") == arg)
+    {
+      char* endptr = NULL;
+      options->image_width = strtol(value, &endptr, 10);
+      fail = (endptr == value);
+    }
+    else if (strstr(arg, "--image-height=") == arg)
+    {
+      char* endptr = NULL;
+      options->image_height = strtol(value, &endptr, 10);
+      fail = (endptr == value);
+    }
+    else if (strstr(arg, "--sr-front=") == arg)
+    {
+      char* endptr = NULL;
+      options->sr_front = strtof(value, &endptr);
+      fail = (endptr == value);
+    }
+    else if (strstr(arg, "--sr-back=") == arg)
+    {
+      char* endptr = NULL;
+      options->sr_back = strtof(value, &endptr);
+      fail = (endptr == value);
+    }
+    else if (strstr(arg, "--sr-outside-frustum=") == arg)
+    {
+      char* endptr = NULL;
+      options->sr_outside_frustum = strtof(value, &endptr);
+      fail = (endptr == value);
+    }
+
+    if (fail) {
+      gp_print_usage_and_exit();
+    }
+  }
 }
 
 static void gp_assimp_add_node_mesh(
@@ -372,12 +470,13 @@ static void gp_free_scene(gp_scene* scene)
 }
 
 static void gp_write_scene(
+  struct program_options* options,
   const gp_scene* scene,
   const char* file_path)
 {
   const gp_bvhcc* bvhcc = &scene->bvhcc;
 
-  const uint64_t header_size = 128;
+  const uint64_t header_size = 256;
   const uint64_t node_buf_offset = header_size;
   const uint64_t node_buf_size = bvhcc->node_count * sizeof(gp_bvhcc_node);
   const uint64_t face_buf_offset = node_buf_offset + node_buf_size;
@@ -391,16 +490,18 @@ static void gp_write_scene(
 
   uint8_t* buffer = malloc(file_size);
 
-  memcpy(&buffer[ 0], &node_buf_offset,     8);
-  memcpy(&buffer[ 8], &node_buf_size,       8);
-  memcpy(&buffer[16], &face_buf_offset,     8);
-  memcpy(&buffer[24], &face_buf_size,       8);
-  memcpy(&buffer[32], &vertex_buf_offset,   8);
-  memcpy(&buffer[40], &vertex_buf_size,     8);
-  memcpy(&buffer[48], &material_buf_offset, 8);
-  memcpy(&buffer[56], &material_buf_size,   8);
-  memcpy(&buffer[64], &bvhcc->aabb,         sizeof(gp_aabb));
-  memcpy(&buffer[88], &scene->camera,       sizeof(gp_camera));
+  memcpy(&buffer[ 0], &options->image_width,  4);
+  memcpy(&buffer[ 4], &options->image_height, 4);
+  memcpy(&buffer[ 8], &node_buf_offset,       8);
+  memcpy(&buffer[16], &node_buf_size,         8);
+  memcpy(&buffer[24], &face_buf_offset,       8);
+  memcpy(&buffer[32], &face_buf_size,         8);
+  memcpy(&buffer[40], &vertex_buf_offset,     8);
+  memcpy(&buffer[48], &vertex_buf_size,       8);
+  memcpy(&buffer[56], &material_buf_offset,   8);
+  memcpy(&buffer[64], &material_buf_size,     8);
+  memcpy(&buffer[72], &bvhcc->aabb,           sizeof(gp_aabb));
+  memcpy(&buffer[96], &scene->camera,         sizeof(gp_camera));
 
   memcpy(&buffer[node_buf_offset], bvhcc->nodes, node_buf_size);
 
@@ -428,24 +529,19 @@ static void gp_write_scene(
 
 int main(int argc, const char* argv[])
 {
-  if (argc != 3)
-  {
-    printf("Usage: gp <input_file> <output.gsd>\n");
-    return EXIT_FAILURE;
-  }
-
-  const char* file_path_in = argv[1];
-  const char* file_path_out = argv[2];
+  struct program_options options;
+  gp_parse_args(argc, argv, &options);
 
   gp_scene scene;
   gp_load_scene(
     &scene,
-    file_path_in
+    options.input_path
   );
 
   gp_write_scene(
+    &options,
     &scene,
-    file_path_out
+    options.output_path
   );
 
   gp_free_scene(&scene);

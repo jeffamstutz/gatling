@@ -36,7 +36,9 @@ cmake --build . --target gp gatling
 
 Before path tracing, an intermediate representation of the scene must be built using `gp`, _gatling_'s asset compiler:
 ```
-./bin/gp cornell_box.gltf scene.gsd
+./bin/gp cornell.glb scene.gsd \
+    --image-width=1920 \
+    --image-height=1080
 ```
 
 Make sure there is a camera in the scene and at least one emissive surface. It is recommended to use glTF as the transmission format.  
@@ -44,8 +46,6 @@ Make sure there is a camera in the scene and at least one emissive surface. It i
 Next, either disable the system's GPU watchdog or set an appropriate timeout value. For rendering, multiple optional arguments can be provided:
 ```
 ./bin/gatling scene.gsd render.png \
-    --image-width=1200 \
-    --image-height=1200 \
     --spp=256 \
     --max-bounces=4 \
     --rr-bounce-offset=3 \

@@ -9,18 +9,14 @@
 #include "img.h"
 #include "mmap.h"
 
-static uint32_t DEFAULT_IMAGE_WIDTH = 1200;
-static uint32_t DEFAULT_IMAGE_HEIGHT = 1200;
 static uint32_t DEFAULT_SPP = 256;
 static uint32_t DEFAULT_MAX_BOUNCES = 4;
 static uint32_t DEFAULT_RR_BOUNCE_OFFSET = 3;
 static float DEFAULT_RR_INV_MIN_TERM_PROB = 1.0f;
 
 typedef struct program_options {
-  const char* input_file;
-  const char* output_file;
-  uint32_t image_width;
-  uint32_t image_height;
+  const char* input_path;
+  const char* output_path;
   uint32_t spp;
   uint32_t max_bounces;
   uint32_t rr_bounce_offset;
@@ -69,8 +65,6 @@ static void gatling_print_usage_and_exit()
   printf("Usage: gatling <scene.gsd> <output.png> [options]\n");
   printf("\n");
   printf("Options:\n");
-  printf("--image-width          [default: %u]\n", DEFAULT_IMAGE_WIDTH);
-  printf("--image-height         [default: %u]\n", DEFAULT_IMAGE_HEIGHT);
   printf("--spp                  [default: %u]\n", DEFAULT_SPP);
   printf("--max-bounces          [default: %u]\n", DEFAULT_MAX_BOUNCES);
   printf("--rr-bounce-offset     [default: %u]\n", DEFAULT_RR_BOUNCE_OFFSET);
@@ -84,10 +78,8 @@ static void gatling_parse_args(int argc, const char* argv[], program_options* op
     gatling_print_usage_and_exit();
   }
 
-  options->input_file = argv[1];
-  options->output_file = argv[2];
-  options->image_width = DEFAULT_IMAGE_WIDTH;
-  options->image_height = DEFAULT_IMAGE_HEIGHT;
+  options->input_path = argv[1];
+  options->output_path = argv[2];
   options->spp = DEFAULT_SPP;
   options->max_bounces = DEFAULT_MAX_BOUNCES;
   options->rr_bounce_offset = DEFAULT_RR_BOUNCE_OFFSET;
@@ -107,19 +99,7 @@ static void gatling_parse_args(int argc, const char* argv[], program_options* op
 
     bool fail = true;
 
-    if (strstr(arg, "--image-width=") == arg)
-    {
-      char* endptr = NULL;
-      options->image_width = strtol(value, &endptr, 10);
-      fail = (endptr == value);
-    }
-    else if (strstr(arg, "--image-height=") == arg)
-    {
-      char* endptr = NULL;
-      options->image_height = strtol(value, &endptr, 10);
-      fail = (endptr == value);
-    }
-    else if (strstr(arg, "--spp=") == arg)
+    if (strstr(arg, "--spp=") == arg)
     {
       char* endptr = NULL;
       options->spp = strtol(value, &endptr, 10);
@@ -198,7 +178,7 @@ int main(int argc, const char* argv[])
 
   /* Map scene file for copying. */
   gatling_file* scene_file;
-  const bool ok = gatling_file_open(options.input_file, GATLING_FILE_USAGE_READ, &scene_file);
+  const bool ok = gatling_file_open(options.input_path, GATLING_FILE_USAGE_READ, &scene_file);
   if (!ok) {
     gatling_fail("Unable to read scene file.");
   }
@@ -217,6 +197,8 @@ int main(int argc, const char* argv[])
 
   /* Create input and output buffers. */
   const struct file_header {
+    uint32_t image_width;
+    uint32_t image_height;
     uint64_t node_buf_offset;
     uint64_t node_buf_size;
     uint64_t face_buf_offset;
@@ -246,7 +228,7 @@ int main(int argc, const char* argv[])
   const uint64_t new_vertex_buf_offset = gatling_align_buffer(offset_align, file_header.vertex_buf_size, &device_buf_size);
   const uint64_t new_material_buf_offset = gatling_align_buffer(offset_align, file_header.material_buf_size, &device_buf_size);
 
-  const uint64_t output_buffer_size = options.image_width * options.image_height * sizeof(float) * 4;
+  const uint64_t output_buffer_size = file_header.image_width * file_header.image_height * sizeof(float) * 4;
   const uint64_t staging_buffer_size = output_buffer_size > device_buf_size ? output_buffer_size : device_buf_size;
 
   cgpu_buffer input_buffer;
@@ -383,7 +365,7 @@ int main(int argc, const char* argv[])
     const uint32_t node_count = file_header.node_buf_size / node_size;
     const uint32_t traversal_stack_size = (log(node_count) / log(8)) * 2;
 
-    const float aspect_ratio = (float) options.image_width / (float) options.image_height;
+    const float aspect_ratio = (float) file_header.image_width / (float) file_header.image_height;
 
     float fov;
 
@@ -396,8 +378,8 @@ int main(int argc, const char* argv[])
     const cgpu_specialization_constant speccs[] = {
       { .constant_id =  0, .p_data = (void*) &device_limits.subgroupSize,   .size = 4 },
       { .constant_id =  1, .p_data = (void*) &device_limits.subgroupSize,   .size = 4 },
-      { .constant_id =  2, .p_data = (void*) &options.image_width,          .size = 4 },
-      { .constant_id =  3, .p_data = (void*) &options.image_height,         .size = 4 },
+      { .constant_id =  2, .p_data = (void*) &file_header.image_width,      .size = 4 },
+      { .constant_id =  3, .p_data = (void*) &file_header.image_height,     .size = 4 },
       { .constant_id =  4, .p_data = (void*) &options.spp,                  .size = 4 },
       { .constant_id =  5, .p_data = (void*) &options.max_bounces,          .size = 4 },
       { .constant_id =  6, .p_data = (void*) &traversal_stack_size,         .size = 4 },
@@ -480,8 +462,8 @@ int main(int argc, const char* argv[])
   /* Trace rays. */
   c_result = cgpu_cmd_dispatch(
     command_buffer,
-    (options.image_width / device_limits.subgroupSize) + 1,
-    (options.image_height / device_limits.subgroupSize) + 1,
+    (file_header.image_width / device_limits.subgroupSize) + 1,
+    (file_header.image_height / device_limits.subgroupSize) + 1,
     1
   );
   gatling_cgpu_ensure(c_result);
@@ -599,7 +581,7 @@ int main(int argc, const char* argv[])
   );
   gatling_cgpu_ensure(c_result);
 
-  uint8_t* image_bytes = (uint8_t*) malloc(options.image_width * options.image_height * 3);
+  uint8_t* image_bytes = (uint8_t*) malloc(file_header.image_width * file_header.image_height * 3);
 
   if (!image_bytes)
   {
@@ -608,19 +590,19 @@ int main(int argc, const char* argv[])
 
   const float gamma = 1.0f / 2.2f;
 
-  for (uint32_t y = 0; y < options.image_height; ++y)
+  for (uint32_t y = 0; y < file_header.image_height; ++y)
   {
-    for (uint32_t x = 0; x < options.image_width; ++x)
+    for (uint32_t x = 0; x < file_header.image_width; ++x)
     {
       for (uint32_t channel = 0; channel < 3; channel++)
       {
-        const uint32_t in_idx = 4 * (y * options.image_width + x) + channel;
+        const uint32_t in_idx = 4 * (y * file_header.image_width + x) + channel;
 
         float value = image_floats[in_idx];
         value = fmaxf(0.0f, fminf(1.0f, value));
         value = powf(value, gamma) * 255.0f + 0.5f;
 
-        const uint32_t out_idx = 3 * (y * options.image_width + x) + channel;
+        const uint32_t out_idx = 3 * (y * file_header.image_width + x) + channel;
 
         image_bytes[out_idx] = (uint8_t) value;
       }
@@ -631,9 +613,9 @@ int main(int argc, const char* argv[])
 
   const bool write_ok = gatling_img_write(
     image_bytes,
-    options.image_width,
-    options.image_height,
-    options.output_file
+    file_header.image_width,
+    file_header.image_height,
+    options.output_path
   );
 
   free(image_bytes);
