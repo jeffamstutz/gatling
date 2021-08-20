@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<materialx version="1.38">
+
+  <!--
+    TM & (c) 2017 Lucasfilm Entertainment Company Ltd. and Lucasfilm Ltd.
+    All rights reserved.  See LICENSE.txt for license.
+
+    Declarations for glsl implementations of standard nodes included in the MaterialX specification.
+  -->
+
+  <!-- <point_light> -->
+  <implementation name="IM_point_light_genvkglsl" nodedef="ND_point_light" file="lights/genglsl/mx_point_light.glsl" function="mx_point_light" target="genvkglsl"/>
+
+  <!-- <directional_light> -->
+  <implementation name="IM_directional_light_genvkglsl" nodedef="ND_directional_light" file="lights/genglsl/mx_directional_light.glsl" function="mx_directional_light" target="genvkglsl"/>
+
+  <!-- <spot_light> -->
+  <implementation name="IM_spot_light_genvkglsl" nodedef="ND_spot_light" file="lights/genglsl/mx_spot_light.glsl" function="mx_spot_light" target="genvkglsl"/>
+
+</materialx>

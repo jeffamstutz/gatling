@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<materialx version="1.38">
+
+  <!--
+    TM & (c) 2017 Lucasfilm Entertainment Company Ltd. and Lucasfilm Ltd.
+    All rights reserved.  See LICENSE.txt for license.
+
+    Declarations for glsl implementations of standard nodes included in the MaterialX specification.
+  -->
+
+  <!-- ======================================================================== -->
+  <!-- Base target definition for VK GLSL targets using shader generation.         -->
+  <!-- ======================================================================== -->
+  <targetdef name="genvkglsl" />
+</materialx>

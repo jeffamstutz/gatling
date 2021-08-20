@@ -51,7 +51,7 @@ endif()
 target_link_libraries(
   hdGatling
   PRIVATE
-    gi usdImaging
+    gi usdImaging hdMtlx
   PUBLIC
     hd
 )

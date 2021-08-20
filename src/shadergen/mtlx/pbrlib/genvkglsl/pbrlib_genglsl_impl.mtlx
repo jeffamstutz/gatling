@@ -1,0 +1,73 @@
+<?xml version="1.0"?>
+<materialx version="1.38">
+
+  <!--
+    TM & (c) 2017 Lucasfilm Entertainment Company Ltd. and Lucasfilm Ltd.
+    All rights reserved.  See LICENSE.txt for license.
+
+    Declarations for glsl implementations of standard nodes included in the MaterialX specification.
+  -->
+
+  <!-- <oren_nayar_diffuse_bsdf> -->
+  <implementation name="IM_oren_nayar_diffuse_bsdf_genvkglsl" nodedef="ND_oren_nayar_diffuse_bsdf" file="pbrlib/genvkglsl/mx_oren_nayar_diffuse_bsdf.glsl" function="mx_oren_nayar_diffuse_bsdf" target="genvkglsl" />
+
+  <!-- <burley_diffuse_bsdf> -->
+  <implementation name="IM_burley_diffuse_bsdf_genvkglsl" nodedef="ND_burley_diffuse_bsdf" file="pbrlib/genvkglsl/mx_burley_diffuse_bsdf.glsl" function="mx_burley_diffuse_bsdf" target="genvkglsl" />
+
+  <!-- <translucent_bsdf> -->
+  <implementation name="IM_translucent_bsdf_genvkglsl" nodedef="ND_translucent_bsdf" file="pbrlib/genvkglsl/mx_translucent_bsdf.glsl" function="mx_translucent_bsdf" target="genvkglsl" />
+
+  <!-- <dielectric_bsdf> -->
+  <implementation name="IM_dielectric_bsdf_genvkglsl" nodedef="ND_dielectric_bsdf" file="pbrlib/genvkglsl/mx_dielectric_bsdf.glsl" function="mx_dielectric_bsdf" target="genvkglsl" />
+
+  <!-- <conductor_bsdf> -->
+  <implementation name="IM_conductor_bsdf_genvkglsl" nodedef="ND_conductor_bsdf" file="pbrlib/genvkglsl/mx_conductor_bsdf.glsl" function="mx_conductor_bsdf" target="genvkglsl" />
+
+  <!-- <generalized_schlick_bsdf> -->
+  <implementation name="IM_generalized_schlick_bsdf_genvkglsl" nodedef="ND_generalized_schlick_bsdf" file="pbrlib/genvkglsl/mx_generalized_schlick_bsdf.glsl" function="mx_generalized_schlick_bsdf" target="genvkglsl" />
+
+  <!-- <subsurface_bsdf> -->
+  <implementation name="IM_subsurface_bsdf_genvkglsl" nodedef="ND_subsurface_bsdf" file="pbrlib/genvkglsl/mx_subsurface_bsdf.glsl" function="mx_subsurface_bsdf" target="genvkglsl" />
+
+  <!-- <sheen_bsdf> -->
+  <implementation name="IM_sheen_bsdf_genvkglsl" nodedef="ND_sheen_bsdf" file="pbrlib/genvkglsl/mx_sheen_bsdf.glsl" function="mx_sheen_bsdf" target="genvkglsl" />
+
+  <!-- <thin_film_bsdf> -->
+  <implementation name="IM_thin_film_bsdf_genvkglsl" nodedef="ND_thin_film_bsdf" target="genvkglsl" />
+
+  <!-- <layer> -->
+  <implementation name="IM_layer_bsdf_genvkglsl" nodedef="ND_layer_bsdf" target="genvkglsl" />
+
+  <!-- <mix> -->
+  <implementation name="IM_mix_bsdf_genvkglsl" nodedef="ND_mix_bsdf" file="pbrlib/genvkglsl/mx_mix_bsdf.glsl" function="mx_mix_bsdf" target="genvkglsl" />
+  <implementation name="IM_mix_edf_genvkglsl" nodedef="ND_mix_edf" file="pbrlib/genvkglsl/mx_mix_edf.glsl" function="mx_mix_edf" target="genvkglsl" />
+
+  <!-- <add> -->
+  <implementation name="IM_add_bsdf_genvkglsl" nodedef="ND_add_bsdf" file="pbrlib/genglsl/mx_add_bsdf.glsl" function="mx_add_bsdf" target="genvkglsl" />
+  <implementation name="IM_add_edf_genvkglsl" nodedef="ND_add_edf" file="pbrlib/genglsl/mx_add_edf.glsl" function="mx_add_edf" target="genvkglsl" />
+
+  <!-- <multiply> -->
+  <implementation name="IM_multiply_bsdfC_genvkglsl" nodedef="ND_multiply_bsdfC" file="pbrlib/genvkglsl/mx_multiply_bsdf_color.glsl" function="mx_multiply_bsdf_color" target="genvkglsl" />
+  <implementation name="IM_multiply_bsdfF_genvkglsl" nodedef="ND_multiply_bsdfF" file="pbrlib/genvkglsl/mx_multiply_bsdf_float.glsl" function="mx_multiply_bsdf_float" target="genvkglsl" />
+  <implementation name="IM_multiply_edfC_genvkglsl" nodedef="ND_multiply_edfC" file="pbrlib/genvkglsl/mx_multiply_edf_color.glsl" function="mx_multiply_edf_color" target="genvkglsl" />
+  <implementation name="IM_multiply_edfF_genvkglsl" nodedef="ND_multiply_edfF" file="pbrlib/genvkglsl/mx_multiply_edf_float.glsl" function="mx_multiply_edf_float" target="genvkglsl" />
+
+  <!-- <uniform_edf> -->
+  <implementation name="IM_uniform_edf_genvkglsl" nodedef="ND_uniform_edf" file="pbrlib/genvkglsl/mx_uniform_edf.glsl" function="mx_uniform_edf" target="genvkglsl" />
+
+  <!-- <surface> -->
+  <implementation name="IM_surface_genvkglsl" nodedef="ND_surface" target="genvkglsl" />
+
+  <!-- <light> -->
+  <implementation name="IM_light_genvkglsl" nodedef="ND_light" target="genvkglsl" />
+
+  <!-- <roughness_anisotropy> -->
+  <implementation name="IM_roughness_anisotropy_genvkglsl" nodedef="ND_roughness_anisotropy" file="pbrlib/genglsl/mx_roughness_anisotropy.glsl" function="mx_roughness_anisotropy" target="genvkglsl" />
+
+  <!-- <roughness_dual> -->
+  <implementation name="IM_roughness_dual_genvkglsl" nodedef="ND_roughness_dual" file="pbrlib/genglsl/mx_roughness_dual.glsl" function="mx_roughness_dual" target="genvkglsl" />
+
+  <!-- <artistic_ior> -->
+  <implementation name="IM_artistic_ior_genvkglsl" nodedef="ND_artistic_ior" file="pbrlib/genglsl/mx_artistic_ior.glsl" function="mx_artistic_ior" target="genvkglsl" />
+
+</materialx>

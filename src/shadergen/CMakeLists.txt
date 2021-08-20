@@ -4,6 +4,10 @@ add_library(
   src/shadergen.cpp
   src/VkGlslSyntax.h
   src/VkGlslSyntax.cpp
+  src/VkGlslShaderGenerator.cpp
+  src/VkGlslShaderGenerator.h
+  src/Nodes/SurfaceNodeVkGlsl.h
+  src/Nodes/SurfaceNodeVkGlsl.cpp
 )
 
 set_target_properties(
@@ -27,5 +31,6 @@ target_link_libraries(
   shadergen
   PRIVATE
     MaterialXGenShader
+    MaterialXGenGlsl
     shaderc
 )

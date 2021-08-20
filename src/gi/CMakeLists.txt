@@ -39,6 +39,7 @@ target_link_libraries(
   gi
   PRIVATE
     gi-shaders
+    shadergen
     cgpu
     ${C_MATH_LIBRARY}
     gml

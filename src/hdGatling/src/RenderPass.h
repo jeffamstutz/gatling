@@ -40,7 +40,7 @@ private:
                    GfMatrix4d rootTransform,
                    std::vector<gi_vertex>& vertices,
                    std::vector<gi_face>& faces,
-                   std::vector<gi_material>& materials) const;
+                   std::vector<const char*>& materials) const;
 
   void _ConstructGiCamera(const HdGatlingCamera& camera, gi_camera& giCamera) const;
 

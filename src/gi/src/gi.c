@@ -11,16 +11,17 @@
 
 #include <cgpu.h>
 #include <SPV/main.comp.spv.h>
+#include <shadergen.h>
 
 struct gi_scene_cache
 {
-  gp_bvhcc             bvhcc;
-  uint32_t             face_count;
-  struct gi_face*      faces;
-  struct gp_material * materials;
-  uint32_t             material_count;
-  uint32_t             vertex_count;
-  struct gi_vertex*    vertices;
+  gp_bvhcc          bvhcc;
+  uint32_t          face_count;
+  struct gi_face*   faces;
+  uint16_t*         shader;
+  uint32_t          shader_size;
+  uint32_t          vertex_count;
+  struct gi_vertex* vertices;
 };
 
 int giInitialize()
@@ -49,7 +50,7 @@ int giCreateSceneCache(struct gi_scene_cache** cache)
 void giDestroySceneCache(struct gi_scene_cache* cache)
 {
   gp_free_bvhcc(&cache->bvhcc);
-  free(cache->materials);
+  free(cache->shader);
   free(cache->vertices);
   free(cache->faces);
   free(cache);
@@ -96,6 +97,21 @@ int giPreprocess(const struct gi_preprocess_params* params,
   gp_bvh_collapse(&cparams, &bvhc);
   gp_free_bvh(&bvh);
 
+  /* Generate ubershader from materials. */
+  {
+    ShaderGenResult result = shadergen_gen_main(
+      params->materials,
+      params->material_count,
+      &scene_cache->shader_size,
+      &scene_cache->shader
+    );
+
+    if (result != SHADERGEN_RESULT_OK)
+    {
+      return GI_ERROR;
+    }
+  }
+
   /* Copy vertices, materials and new faces. */
   scene_cache->face_count = bvhc.face_count;
   scene_cache->faces = malloc(scene_cache->face_count * sizeof(struct gi_face));
@@ -104,10 +120,6 @@ int giPreprocess(const struct gi_preprocess_params* params,
   scene_cache->vertex_count = params->vertex_count;
   scene_cache->vertices = malloc(scene_cache->vertex_count * sizeof(struct gi_vertex));
   memcpy(scene_cache->vertices, params->vertices, params->vertex_count * sizeof(struct gi_vertex));
-
-  scene_cache->material_count = params->material_count;
-  scene_cache->materials = malloc(scene_cache->material_count * sizeof(struct gi_material));
-  memcpy(scene_cache->materials, params->materials, params->material_count * sizeof(struct gi_material));
 
   gp_bvh_compress(&bvhc, &scene_cache->bvhcc);
   gp_free_bvhc(&bvhc);
@@ -162,12 +174,10 @@ int giRender(const struct gi_render_params* params,
   uint64_t node_buf_size = params->scene_cache->bvhcc.node_count * sizeof(gp_bvhcc_node);
   uint64_t face_buf_size = params->scene_cache->face_count * sizeof(struct gi_face);
   uint64_t vertex_buf_size = params->scene_cache->vertex_count * sizeof(struct gi_vertex);
-  uint64_t material_buf_size = params->scene_cache->material_count * sizeof(struct gi_material);
 
   const uint64_t new_node_buf_offset = gi_align_buffer(offset_align, node_buf_size, &device_buf_size);
   const uint64_t new_face_buf_offset = gi_align_buffer(offset_align, face_buf_size, &device_buf_size);
   const uint64_t new_vertex_buf_offset = gi_align_buffer(offset_align, vertex_buf_size, &device_buf_size);
-  const uint64_t new_material_buf_offset = gi_align_buffer(offset_align, material_buf_size, &device_buf_size);
 
   const int COLOR_COMPONENT_COUNT = 4;
   const uint64_t output_buffer_size = params->image_width * params->image_height * sizeof(float) * COLOR_COMPONENT_COUNT;
@@ -217,7 +227,6 @@ int giRender(const struct gi_render_params* params,
   memcpy(&mapped_staging_mem[new_node_buf_offset], params->scene_cache->bvhcc.nodes, node_buf_size);
   memcpy(&mapped_staging_mem[new_face_buf_offset], params->scene_cache->faces, face_buf_size);
   memcpy(&mapped_staging_mem[new_vertex_buf_offset], params->scene_cache->vertices, vertex_buf_size);
-  memcpy(&mapped_staging_mem[new_material_buf_offset], params->scene_cache->materials, material_buf_size);
 
   c_result = cgpu_unmap_buffer(
     device,
@@ -246,7 +255,6 @@ int giRender(const struct gi_render_params* params,
       { 1,        input_buffer,     new_node_buf_offset,     node_buf_size },
       { 2,        input_buffer,     new_face_buf_offset,     face_buf_size },
       { 3,        input_buffer,   new_vertex_buf_offset,   vertex_buf_size },
-      { 4,        input_buffer, new_material_buf_offset, material_buf_size },
     };
     const uint32_t sr_buffer_count = sizeof(sr_buffers) / sizeof(sr_buffers[0]);
 
@@ -338,6 +346,7 @@ int giRender(const struct gi_render_params* params,
   GI_CGPU_VERIFY(c_result);
 
   /* Trace rays. */
+#if 0
   c_result = cgpu_cmd_dispatch(
     command_buffer,
     (params->image_width + workgroup_size_x - 1) / workgroup_size_x,
@@ -345,6 +354,7 @@ int giRender(const struct gi_render_params* params,
     1
   );
   GI_CGPU_VERIFY(c_result);
+#endif
 
   /* Copy output buffer to staging buffer. */
   c_result = cgpu_cmd_pipeline_barrier(

@@ -2,7 +2,10 @@
 
 #include <pxr/imaging/hd/material.h>
 
-#include <gi.h>
+namespace MaterialX
+{
+  using DocumentPtr = std::shared_ptr<class Document>;
+}
 
 PXR_NAMESPACE_OPEN_SCOPE
 
@@ -14,7 +17,7 @@ public:
   ~HdGatlingMaterial() override;
 
 public:
-  const gi_material& GetGiMaterial() const;
+  const char* GetMaterialXDocumentString() const;
 
 public:
   void Sync(HdSceneDelegate* sceneDelegate,
@@ -24,10 +27,14 @@ public:
   HdDirtyBits GetInitialDirtyBitsMask() const override;
 
 private:
-  void _ReadMaterialNetwork(const HdMaterialNetwork* network);
+  bool _GetMaterialNetworkSurfaceTerminal(const HdMaterialNetwork2& network2, HdMaterialNode2& surfaceTerminal);
+  void _LoadMaterialXStandardLibrary(MaterialX::DocumentPtr doc);
+  void _CreateMaterialXDocumentFromMaterialNetwork2(const HdMaterialNetwork2& network, MaterialX::DocumentPtr& doc);
+  void _ProcessMaterialNetwork2(const HdMaterialNetwork2& network);
+  void _ProcessMaterialNetworkMap(const HdMaterialNetworkMap& networkMap);
 
 private:
-  gi_material m_material;
+  std::string m_mtlxDocStr;
 };
 
 PXR_NAMESPACE_CLOSE_SCOPE

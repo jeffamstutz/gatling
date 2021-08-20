@@ -1,33 +1,32 @@
 #include "Material.h"
 
+#include <pxr/imaging/hdMtlx/hdMtlx.h>
+#include <pxr/usd/sdf/assetPath.h>
 #include <pxr/usdImaging/usdImaging/tokens.h>
+
+#include <MaterialXCore/Document.h>
+#include <MaterialXCore/Library.h>
+#include <MaterialXCore/Material.h>
+#include <MaterialXCore/Definition.h>
+#include <MaterialXFormat/File.h>
+#include <MaterialXFormat/Util.h>
 
 PXR_NAMESPACE_OPEN_SCOPE
 
-TF_DEFINE_PRIVATE_TOKENS(
-  _usdPreviewSurfaceParamTokens,
-  (diffuseColor)
-  (emissiveColor)
-);
+namespace mx = MaterialX;
 
 HdGatlingMaterial::HdGatlingMaterial(const SdfPath& id)
   : HdMaterial(id)
 {
-  m_material.albedo[0] = 0.0f;
-  m_material.albedo[1] = 0.0f;
-  m_material.albedo[2] = 0.0f;
-  m_material.emission[0] = 0.0f;
-  m_material.emission[1] = 0.0f;
-  m_material.emission[2] = 0.0f;
 }
 
 HdGatlingMaterial::~HdGatlingMaterial()
 {
 }
 
-const gi_material& HdGatlingMaterial::GetGiMaterial() const
+const char* HdGatlingMaterial::GetMaterialXDocumentString() const
 {
-  return m_material;
+  return m_mtlxDocStr.c_str();
 }
 
 void HdGatlingMaterial::Sync(HdSceneDelegate* sceneDelegate,
@@ -47,7 +46,7 @@ void HdGatlingMaterial::Sync(HdSceneDelegate* sceneDelegate,
 
   const SdfPath& id = GetId();
 
-  VtValue resource = sceneDelegate->GetMaterialResource(id);
+  const VtValue& resource = sceneDelegate->GetMaterialResource(id);
 
   if (!resource.IsHolding<HdMaterialNetworkMap>())
   {
@@ -56,55 +55,104 @@ void HdGatlingMaterial::Sync(HdSceneDelegate* sceneDelegate,
 
   const HdMaterialNetworkMap& networkMap = resource.UncheckedGet<HdMaterialNetworkMap>();
 
-  const HdMaterialNetwork* network = TfMapLookupPtr(networkMap.map, HdMaterialTerminalTokens->surface);
-
-  if (!network)
-  {
-    return;
-  }
-
-  _ReadMaterialNetwork(network);
-}
-
-void HdGatlingMaterial::_ReadMaterialNetwork(const HdMaterialNetwork* network)
-{
-  // Instead of actually trying to understand different nodes and the connections
-  // between them, we just greedily fill our data from all UsdPreviewSurface nodes.
-  for (const HdMaterialNode& node : network->nodes)
-  {
-    if (node.identifier != UsdImagingTokens->UsdPreviewSurface)
-    {
-      continue;
-    }
-
-    auto boxedDiffuseColorIter = node.parameters.find(_usdPreviewSurfaceParamTokens->diffuseColor);
-    auto boxedEmissiveColorIter = node.parameters.find(_usdPreviewSurfaceParamTokens->emissiveColor);
-
-    if (boxedDiffuseColorIter != node.parameters.end())
-    {
-      VtValue vtValue = boxedDiffuseColorIter->second;;
-      GfVec3f diffuseColor = vtValue.Get<GfVec3f>();
-
-      m_material.albedo[0] = diffuseColor[0];
-      m_material.albedo[1] = diffuseColor[1];
-      m_material.albedo[2] = diffuseColor[2];
-    }
-
-    if (boxedEmissiveColorIter != node.parameters.end())
-    {
-      VtValue vtValue = boxedEmissiveColorIter->second;;
-      GfVec3f emissiveColor = vtValue.Get<GfVec3f>();
-
-      m_material.emission[0] = emissiveColor[0];
-      m_material.emission[1] = emissiveColor[1];
-      m_material.emission[2] = emissiveColor[2];
-    }
-  }
+  _ProcessMaterialNetworkMap(networkMap);
 }
 
 HdDirtyBits HdGatlingMaterial::GetInitialDirtyBitsMask() const
 {
   return DirtyBits::DirtyParams;
+}
+
+bool HdGatlingMaterial::_GetMaterialNetworkSurfaceTerminal(const HdMaterialNetwork2& network2, HdMaterialNode2& surfaceTerminal)
+{
+  const auto& surfaceTerminalConnectionIt = network2.terminals.find(HdMaterialTerminalTokens->surface);
+
+  if (surfaceTerminalConnectionIt == network2.terminals.end())
+  {
+    return false;
+  }
+
+  const HdMaterialConnection2& surfaceTerminalConnection = surfaceTerminalConnectionIt->second;
+
+  const SdfPath& surfaceNodePath = surfaceTerminalConnection.upstreamNode;
+
+  const auto& surfaceNodeIt = network2.nodes.find(surfaceNodePath);
+
+  if (surfaceNodeIt == network2.nodes.end())
+  {
+    return false;
+  }
+
+  surfaceTerminal = surfaceNodeIt->second;
+  return true;
+}
+
+void HdGatlingMaterial::_LoadMaterialXStandardLibrary(mx::DocumentPtr doc)
+{
+  const auto librariesPath = mx::FilePath("C:/Users/pablode/tmp/BlenderUSDHydraAddon2/bin/MaterialX/install/libraries"); // TODO: dynamic path
+
+  mx::FileSearchPath folderSearchPath;
+  folderSearchPath.append(librariesPath);
+
+  const std::unordered_set<std::string> folderNames{ "targets", "stdlib", "pbrlib", "bxdf", "lights" };
+
+  mx::loadLibraries(
+    mx::FilePathVec(folderNames.begin(), folderNames.end()),
+    folderSearchPath,
+    doc
+  );
+}
+
+void HdGatlingMaterial::_CreateMaterialXDocumentFromMaterialNetwork2(const HdMaterialNetwork2& network, mx::DocumentPtr& doc)
+{
+  HdMaterialNode2 surfaceTerminal;
+  if (!_GetMaterialNetworkSurfaceTerminal(network, surfaceTerminal))
+  {
+    TF_WARN("Unable to find surface terminal for material network");
+    return;
+  }
+
+  mx::DocumentPtr mtlxStdLib = mx::createDocument(); // TODO: cache this statically
+  _LoadMaterialXStandardLibrary(mtlxStdLib);
+
+  const SdfPath& id = GetId();
+  std::set<SdfPath> hdTextureNodes;
+  MaterialX::StringMap mxHdTextureMap;
+
+  doc = HdMtlxCreateMtlxDocumentFromHdNetwork(
+    network,
+    surfaceTerminal,
+    id,
+    // TODO: stdlib UsdPreviewSurface does not seem to be taken into account for translation.
+    // maybe related to: https://github.com/PixarAnimationStudios/USD/issues/1586
+    mtlxStdLib,
+    &hdTextureNodes,
+    &mxHdTextureMap
+  );
+}
+
+void HdGatlingMaterial::_ProcessMaterialNetwork2(const HdMaterialNetwork2& network)
+{
+  mx::DocumentPtr doc;
+  _CreateMaterialXDocumentFromMaterialNetwork2(network, doc);
+
+  m_mtlxDocStr = mx::writeToXmlString(doc);
+}
+
+void HdGatlingMaterial::_ProcessMaterialNetworkMap(const HdMaterialNetworkMap& networkMap)
+{
+  // Convert legacy HdMaterialNetworkMap to HdMaterialNetwork2.
+  bool isVolume = false;
+  HdMaterialNetwork2 network2;
+  HdMaterialNetwork2ConvertFromHdMaterialNetworkMap(networkMap, &network2, &isVolume);
+
+  if (isVolume)
+  {
+    TF_WARN("Volumes not supported");
+    return;
+  }
+
+  _ProcessMaterialNetwork2(network2);
 }
 
 PXR_NAMESPACE_CLOSE_SCOPE
