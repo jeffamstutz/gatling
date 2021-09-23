@@ -265,7 +265,8 @@ int giRender(const struct gi_render_params* params,
 
     uint32_t spv_size;
     uint32_t* spv;
-    if (!sgGenerateMainShader(&shaderParams, &spv_size, &spv))
+    const char* entry_point;
+    if (!sgGenerateMainShader(&shaderParams, &spv_size, &spv, &entry_point))
     {
       return GI_ERROR;
     }
@@ -291,7 +292,6 @@ int giRender(const struct gi_render_params* params,
 
     const uint32_t sr_image_count = 0;
     const cgpu_shader_resource_image* sr_images = NULL;
-    const char* shader_entry_point = "CSMain";
 
     c_result = cgpu_create_pipeline(
       device,
@@ -300,7 +300,7 @@ int giRender(const struct gi_render_params* params,
       sr_image_count,
       sr_images,
       shader,
-      shader_entry_point,
+      entry_point,
       &pipeline
     );
     GI_CGPU_VERIFY(c_result);
