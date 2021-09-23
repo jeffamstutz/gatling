@@ -292,7 +292,6 @@ int giRender(const struct gi_render_params* params,
     const uint32_t sr_image_count = 0;
     const cgpu_shader_resource_image* sr_images = NULL;
     const char* shader_entry_point = "CSMain";
-    const uint32_t push_constants_size = 0;
 
     c_result = cgpu_create_pipeline(
       device,
@@ -302,7 +301,6 @@ int giRender(const struct gi_render_params* params,
       sr_images,
       shader,
       shader_entry_point,
-      push_constants_size,
       &pipeline
     );
     GI_CGPU_VERIFY(c_result);
