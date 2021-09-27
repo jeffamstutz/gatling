@@ -38,6 +38,7 @@ install(
 #
 # shaderc dependencies. The revisions are taken from the repo/DEPS.
 #
+if(NOT ${GATLING_USE_DXC})
 
 # SPIRV-Headers
 set(SPIRV_HEADERS_SKIP_EXAMPLES ON)
@@ -79,3 +80,5 @@ FetchContent_Declare(
   GIT_TAG v2021.2
 )
 FetchContent_MakeAvailable(shaderc)
+
+endif()

@@ -1,6 +1,10 @@
 #include "shadergen.h"
 
+#ifdef GATLING_USE_DXC
+#include "DxcShaderCompiler.h"
+#else
 #include "GlslangShaderCompiler.h"
+#endif
 
 #include <string>
 #include <sstream>
@@ -13,7 +17,11 @@ std::unique_ptr<sg::IShaderCompiler> s_shaderCompiler;
 bool sgInitialize(const char* resourcePath)
 {
   s_shaderPath = std::string(resourcePath) + "/shaders";
+#ifdef GATLING_USE_DXC
+  s_shaderCompiler = std::make_unique<sg::DxcShaderCompiler>(s_shaderPath);
+#else
   s_shaderCompiler = std::make_unique<sg::GlslangShaderCompiler>(s_shaderPath);
+#endif
 
   if (!s_shaderCompiler->init())
   {

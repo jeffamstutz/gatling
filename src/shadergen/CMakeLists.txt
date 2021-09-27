@@ -8,6 +8,12 @@ add_library(
   src/GlslangShaderCompiler.cpp
 )
 
+if(${GATLING_USE_DXC})
+  target_sources(shadergen PRIVATE src/DxcShaderCompiler.h src/DxcShaderCompiler.cpp)
+else()
+  target_sources(shadergen PRIVATE src/GlslangShaderCompiler.h src/GlslangShaderCompiler.cpp)
+endif()
+
 set_target_properties(
   shadergen
   PROPERTIES
@@ -25,12 +31,12 @@ target_include_directories(
     src
 )
 
-target_link_libraries(
-  shadergen
-  PRIVATE
-    shaderc
-    shaderc_util
-)
+if(${GATLING_USE_DXC})
+  target_link_libraries(shadergen PRIVATE DXC)
+  target_compile_definitions(shadergen PRIVATE GATLING_USE_DXC)
+else()
+  target_link_libraries(shadergen PRIVATE shaderc shaderc_util)
+endif()
 
 install(
   DIRECTORY
