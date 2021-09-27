@@ -42,6 +42,17 @@ void giTerminate()
   cgpu_terminate();
 }
 
+struct gi_material* giCreateMaterialFromMtlx(const char* doc)
+{
+  // TODO
+  return NULL;
+}
+
+void giDestroyMaterial(struct gi_material* material)
+{
+  // TODO
+}
+
 int giCreateSceneCache(struct gi_scene_cache** cache)
 {
   *cache = malloc(sizeof(struct gi_scene_cache));
@@ -108,9 +119,10 @@ int giPreprocess(const struct gi_preprocess_params* params,
   scene_cache->vertices = malloc(scene_cache->vertex_count * sizeof(struct gi_vertex));
   memcpy(scene_cache->vertices, params->vertices, params->vertex_count * sizeof(struct gi_vertex));
 
+  // TODO: replace material buffer with generated shader code
   scene_cache->material_count = params->material_count;
   scene_cache->materials = malloc(scene_cache->material_count * sizeof(struct gi_material));
-  memcpy(scene_cache->materials, params->materials, params->material_count * sizeof(struct gi_material));
+  //memcpy(scene_cache->materials, params->materials, params->material_count * sizeof(struct gi_material));
 
   gi_bvh_compress(&bvhc, &scene_cache->bvhcc);
   gi_free_bvhc(&bvhc);
